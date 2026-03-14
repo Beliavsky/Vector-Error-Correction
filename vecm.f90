@@ -439,7 +439,7 @@ if (present(tol_small)) eps = tol_small
 
 print *
 print '(a)', 'eigenvalue-gap report'
-print '(a)', 'i        lambda(i)      lambda(i+1)      ratio'
+print '(a)', '  i       lambda(i)     lambda(i+1)      ratio'
 
 do i = 1, n - 1
  ratio = lambda(i) / max(lambda(i + 1), eps)
