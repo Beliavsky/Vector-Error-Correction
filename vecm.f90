@@ -8,7 +8,7 @@ implicit none
 private
 public :: simulate_vecm, johansen_fit, print_fit_vs_truth, &
    determine_rank_trace, determine_rank_maxeig, johansen_rank_stats, &
-   determine_rank_gap, print_rank_gap_report
+   determine_rank_gap, print_rank_gap_report, monte_carlo_rank_cv
 
 contains
 
@@ -447,5 +447,128 @@ do i = 1, n - 1
 end do
 
 end subroutine print_rank_gap_report
+
+subroutine sort_real_increasing(x)
+! sort a real vector into increasing order by insertion sort
+real(kind=dp), intent(inout) :: x(:)
+
+integer :: i, j
+real(kind=dp) :: key
+
+do i = 2, size(x)
+ key = x(i)
+ j = i - 1
+ do while (j >= 1)
+  if (x(j) <= key) exit
+  x(j + 1) = x(j)
+  j = j - 1
+ end do
+ x(j + 1) = key
+end do
+
+end subroutine sort_real_increasing
+
+real(kind=dp) function empirical_quantile(x, prob) result(q)
+! return the empirical quantile x_(ceil(prob*n)) after sorting x
+real(kind=dp), intent(in) :: x(:)
+real(kind=dp), intent(in) :: prob
+
+integer :: n, k
+real(kind=dp), allocatable :: xs(:)
+
+n = size(x)
+if (n <= 0) stop 'empirical_quantile: empty input'
+if (prob <= 0.0_dp .or. prob >= 1.0_dp) stop 'empirical_quantile: prob must be in (0,1)'
+
+allocate(xs(n))
+xs = x
+call sort_real_increasing(xs)
+
+k = ceiling(prob * real(n, kind=dp))
+k = max(1, min(n, k))
+q = xs(k)
+
+deallocate(xs)
+
+end function empirical_quantile
+
+subroutine monte_carlo_rank_cv(t_keep, p, burn, alpha_template, beta_template, &
+ gamma, sigma_u, nsim, prob, trace_cv, maxeig_cv)
+! estimate Johansen trace and max-eigenvalue critical values by Monte Carlo
+!
+! for each null rank r0 = 0, ..., n-1:
+!   1. simulate nsim VECM data sets with true rank r0
+!   2. compute the Johansen statistics
+!   3. keep the statistic for that null rank
+!   4. take the empirical quantile as the critical value
+!
+! alpha_template and beta_template must have at least n-1 columns.
+! for null rank r0, the first r0 columns are used.
+
+integer, intent(in) :: t_keep     ! number of kept observations per simulation
+integer, intent(in) :: p          ! VAR lag order in levels
+integer, intent(in) :: burn       ! burn-in observations per simulation
+integer, intent(in) :: nsim       ! number of Monte Carlo replications per null rank
+
+real(kind=dp), intent(in) :: alpha_template(:,:) ! template alpha columns for null DGPs
+real(kind=dp), intent(in) :: beta_template(:,:)  ! template beta columns for null DGPs
+real(kind=dp), intent(in) :: gamma(:,:,:)        ! short-run coefficient matrices
+real(kind=dp), intent(in) :: sigma_u(:,:)        ! innovation covariance matrix
+real(kind=dp), intent(in) :: prob                ! critical-value quantile, e.g. 0.95
+
+real(kind=dp), intent(out) :: trace_cv(:)   ! Monte Carlo trace critical values
+real(kind=dp), intent(out) :: maxeig_cv(:)  ! Monte Carlo max-eigenvalue critical values
+
+integer :: n, ntemplate, r0, isim, r_work
+real(kind=dp), allocatable :: alpha0(:,:), beta0(:,:)
+real(kind=dp), allocatable :: ysim(:,:), lambda(:), trace_stat(:), maxeig_stat(:)
+real(kind=dp), allocatable :: trace_draw(:), maxeig_draw(:)
+
+n = size(sigma_u,1)
+
+if (size(sigma_u,2) /= n) stop 'monte_carlo_rank_cv: sigma_u must be square'
+if (size(trace_cv) /= n) stop 'monte_carlo_rank_cv: trace_cv has wrong length'
+if (size(maxeig_cv) /= n) stop 'monte_carlo_rank_cv: maxeig_cv has wrong length'
+if (size(alpha_template,1) /= n) stop 'monte_carlo_rank_cv: alpha_template has wrong row size'
+if (size(beta_template,1) /= n) stop 'monte_carlo_rank_cv: beta_template has wrong row size'
+if (size(alpha_template,2) /= size(beta_template,2)) stop 'monte_carlo_rank_cv: alpha/beta template column mismatch'
+if (nsim <= 0) stop 'monte_carlo_rank_cv: nsim must be positive'
+if (prob <= 0.0_dp .or. prob >= 1.0_dp) stop 'monte_carlo_rank_cv: prob must be in (0,1)'
+
+ntemplate = size(alpha_template,2)
+if (ntemplate < n - 1) stop 'monte_carlo_rank_cv: need at least n-1 template columns'
+
+do r0 = 0, n - 1
+ allocate(trace_draw(nsim), maxeig_draw(nsim))
+
+ ! for r0 = 0, use one zero column so the simulated pi matrix is zero
+ ! for r0 > 0, use the first r0 template columns
+ r_work = max(1, r0)
+ allocate(alpha0(n,r_work), beta0(n,r_work))
+ alpha0 = 0.0_dp
+ beta0 = 0.0_dp
+
+ if (r0 > 0) then
+  alpha0(:,1:r0) = alpha_template(:,1:r0)
+  beta0(:,1:r0) = beta_template(:,1:r0)
+ end if
+
+ do isim = 1, nsim
+  call simulate_vecm(t_keep, alpha0, beta0, gamma, sigma_u, burn, ysim)
+  call johansen_rank_stats(ysim, p, lambda, trace_stat, maxeig_stat)
+
+  trace_draw(isim) = trace_stat(r0 + 1)
+  maxeig_draw(isim) = maxeig_stat(r0 + 1)
+
+  deallocate(ysim, lambda, trace_stat, maxeig_stat)
+ end do
+
+ trace_cv(r0 + 1) = empirical_quantile(trace_draw, prob)
+ maxeig_cv(r0 + 1) = empirical_quantile(maxeig_draw, prob)
+
+ deallocate(alpha0, beta0, trace_draw, maxeig_draw)
+end do
+
+end subroutine monte_carlo_rank_cv
 
 end module vecm_johansen_mod

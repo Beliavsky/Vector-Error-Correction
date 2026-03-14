@@ -57,7 +57,7 @@ pi_true = matmul(alpha_true, transpose(beta_true))
 call set_seed(12345)
 
 call simulate_vecm(t_keep, alpha_true, beta_true, gamma_true, sigma_u_true, burn, y)
-
+print "('#obs #col:',*(1x,i0))", shape(y)
 ! compute the Johansen eigenvalues and statistics
 call johansen_rank_stats(y, p, lambda, trace_stat, maxeig_stat)
 

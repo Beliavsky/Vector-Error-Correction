@@ -325,42 +325,119 @@ subroutine residualize_on_w(a, w, resid)
 ! residuals from regressing columns of a on w
 real(kind=dp), intent(in) :: a(:,:), w(:,:)
 real(kind=dp), allocatable, intent(out) :: resid(:,:)
-integer :: k, info
-real(kind=dp), allocatable :: wtw(:,:), wta(:,:), coef(:,:)
+
+integer :: k, rank_w
+real(kind=dp), allocatable :: coef(:,:)
 
 k = size(w,2)
 allocate(resid(size(a,1),size(a,2)))
+
 if (k == 0) then
  resid = a
  return
 end if
 
-call crossprod1(w, wtw)
-call crossprod2(w, a, wta)
-call solve_linear(wtw, wta, coef, info)
-if (info /= 0) stop 'solve_linear failed in residualize_on_w'
-resid = a - matmul(w, coef)
-deallocate(wtw, wta, coef)
+call qr_least_squares(w, a, coef, resid, rank_w)
+
 end subroutine residualize_on_w
 
 subroutine ols_fit(x, y, b, resid, sigma)
-! b = argmin || y - x b ||^2
+! b = argmin || y - x*b ||^2
 ! sigma = transpose(resid) * resid / nobs
 real(kind=dp), intent(in) :: x(:,:), y(:,:)
 real(kind=dp), allocatable, intent(out) :: b(:,:), resid(:,:), sigma(:,:)
-integer :: info, m
-real(kind=dp), allocatable :: xtx(:,:), xty(:,:)
 
-call crossprod1(x, xtx)
-call crossprod2(x, y, xty)
-call solve_linear(xtx, xty, b, info)
-if (info /= 0) stop 'solve_linear failed in ols_fit'
-allocate(resid(size(y,1),size(y,2)))
-resid = y - matmul(x, b)
+integer :: m, rank_x
+
+call qr_least_squares(x, y, b, resid, rank_x)
+
 m = size(y,1)
 call crossprod1(resid, sigma)
 sigma = sigma / real(m, kind=dp)
-deallocate(xtx, xty)
+
 end subroutine ols_fit
+
+subroutine qr_least_squares(a, b, x, resid, rank, tol)
+! solve min || a*x - b ||_2 by QR using modified Gram-Schmidt
+! this avoids forming transpose(a)*a
+!
+! a     : m x n design matrix
+! b     : m x nrhs right-hand side matrix
+! x     : n x nrhs least-squares coefficients
+! resid : m x nrhs residual matrix b - a*x
+! rank  : numerical rank of a
+
+real(kind=dp), intent(in) :: a(:,:), b(:,:)
+real(kind=dp), allocatable, intent(out) :: x(:,:), resid(:,:)
+integer, intent(out) :: rank
+real(kind=dp), intent(in), optional :: tol
+
+integer :: m, n, nrhs, i, j, k
+real(kind=dp) :: tol_use, col_norm, scale_a
+real(kind=dp), allocatable :: q(:,:), r(:,:), rhs(:,:), v(:)
+integer, allocatable :: piv(:)
+
+m = size(a,1)
+n = size(a,2)
+nrhs = size(b,2)
+
+if (size(b,1) /= m) error stop 'qr_least_squares: incompatible dimensions'
+
+allocate(q(m,n), r(n,n), rhs(n,nrhs), x(n,nrhs), resid(m,nrhs), v(m), piv(n))
+
+q = 0.0_dp
+r = 0.0_dp
+rhs = 0.0_dp
+x = 0.0_dp
+piv = 0
+
+scale_a = max(1.0_dp, maxval(abs(a)))
+tol_use = 1.0e-10_dp * scale_a
+if (present(tol)) tol_use = tol
+
+rank = 0
+do j = 1, n
+ v = a(:,j)
+
+ do i = 1, rank
+  r(i,j) = dot_product(q(:,i), v)
+  v = v - r(i,j) * q(:,i)
+ end do
+
+ col_norm = sqrt(max(0.0_dp, dot_product(v, v)))
+
+ if (col_norm > tol_use) then
+  rank = rank + 1
+  piv(rank) = j
+  r(rank,j) = col_norm
+  q(:,rank) = v / col_norm
+ end if
+end do
+
+if (rank > 0) then
+ do i = 1, rank
+  do j = 1, nrhs
+   rhs(i,j) = dot_product(q(:,i), b(:,j))
+  end do
+ end do
+
+ do j = 1, nrhs
+  do i = rank, 1, -1
+   x(piv(i),j) = rhs(i,j)
+   if (i < rank) then
+    do k = i + 1, rank
+     x(piv(i),j) = x(piv(i),j) - r(i,piv(k)) * x(piv(k),j)
+    end do
+   end if
+   x(piv(i),j) = x(piv(i),j) / r(i,piv(i))
+  end do
+ end do
+end if
+
+resid = b - matmul(a, x)
+
+deallocate(q, r, rhs, v, piv)
+
+end subroutine qr_least_squares
 
 end module linear_mod
