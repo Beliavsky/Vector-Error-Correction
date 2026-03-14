@@ -1,5 +1,5 @@
 # Vector-Error-Correction
-Simulate and fit from Vector Error Correction (VECM) models for cointegrated time series using the [Johansen method](https://academic.oup.com/book/27916).
+Simulate and fit from Vector Error Correction (VECM) models for cointegrated time series using the [Johansen method](https://academic.oup.com/book/27916). For
 
 ```fortran
 program xvecm_rank_select
